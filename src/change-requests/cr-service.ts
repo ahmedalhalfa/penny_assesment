@@ -5,7 +5,7 @@ import { assertTransition } from './cr-state-machine';
 import { computeTotals } from './cr-totals';
 import { round2 } from '../common/money.util';
 import { Errors } from '../common/errors';
-import { ReqUser, hasPolicy } from '../common/policy';
+import { ReqUser, hasPolicy, crReadScope, narrowByReadScope } from '../common/policy';
 
 /** Orchestrates CR actions: state transitions, budget checks, permissions, and the audit trail. */
 export class CrService {
@@ -162,13 +162,17 @@ export class CrService {
 
 	/** Read a single CR. */
 	get(user: ReqUser, id: string): ChangeRequest {
-		return this.getOrThrow(user, id);
+		if (!crReadScope(user)) throw Errors.forbidden('Cannot read CR');
+		const cr = this.getOrThrow(user, id);
+		const [visible] = narrowByReadScope(user, [cr]);
+		// NOT_FOUND rather than FORBIDDEN: don't confirm the existence of a CR outside the caller's scope.
+		if (!visible) throw Errors.notFound(`CR ${id} not found`);
+		return visible;
 	}
 
 	/** List the CRs this user is allowed to see. Honor the user's read scope (u/w/o). */
 	list(user: ReqUser): ChangeRequest[] {
-		// TODO: org scoping happens in the repo; narrow further by the caller's read scope.
-		return this.repo.list(user);
+		return narrowByReadScope(user, this.repo.list(user));
 	}
 
 	/** Recompute and persist totals for a CR (used by tests and before routing). Provided. */

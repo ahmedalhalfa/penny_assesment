@@ -1,3 +1,5 @@
+import { ChangeRequest } from '../change-requests/cr.types';
+
 /**
  * Policy-string RBAC + request-user model. Policies are `cr_{action}_{scope}` (see README).
  *
@@ -24,4 +26,13 @@ export function crReadScope(user: ReqUser): ReadScope | null {
 	if (hasPolicy(user, 'cr_r_w')) return 'w';
 	if (hasPolicy(user, 'cr_r_u')) return 'u';
 	return null;
+}
+
+/** Narrow an already org-scoped list of CRs down to what the user's read scope allows. */
+export function narrowByReadScope(user: ReqUser, crs: ChangeRequest[]): ChangeRequest[] {
+	const scope = crReadScope(user);
+	if (!scope) return [];
+	if (scope === 'o') return crs;
+	if (scope === 'w') return crs.filter((cr) => user.workspaceIds.includes(cr.workspaceId));
+	return crs.filter((cr) => cr.createdBy === user.id);
 }
