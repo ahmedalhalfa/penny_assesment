@@ -6,11 +6,7 @@ import { computeTotals } from './cr-totals';
 import { Errors } from '../common/errors';
 import { ReqUser, hasPolicy } from '../common/policy';
 
-/**
- * Orchestrates CR actions. The transition + audit helper is provided; the action methods are
- * STUBS for you to implement (see `../../CANDIDATE_BRIEF.md`). Make the workflow correct, safe,
- * and complete.
- */
+/** Orchestrates CR actions: state transitions, budget checks, permissions, and the audit trail. */
 export class CrService {
 	constructor(
 		private readonly repo: CrRepo,
@@ -34,8 +30,6 @@ export class CrService {
 		cr.audit = [...cr.audit, { action, byUserId, at, note }];
 	}
 
-	// ---- Actions to implement -------------------------------------------------------------
-
 	submit(user: ReqUser, id: string, at: string): ChangeRequest {
 		const cr = this.getOrThrow(user, id);
 		if (!hasPolicy(user, 'cr_u_u') && !hasPolicy(user, 'cr_u_o')) throw Errors.forbidden('Cannot submit');
@@ -44,9 +38,29 @@ export class CrService {
 	}
 
 	sendForApproval(user: ReqUser, id: string, at: string): ChangeRequest {
-		// TODO: move SUBMITTED -> PENDING_APPROVAL, and decide single-approver vs committee
-		//       routing based on |delta| and COMMITTEE_DELTA_THRESHOLD.
-		throw Errors.validation('sendForApproval not implemented');
+		const cr = this.getOrThrow(user, id);
+		if (!hasPolicy(user, 'cr_u_u') && !hasPolicy(user, 'cr_u_o')) throw Errors.forbidden('Cannot send for approval');
+
+		const agreement = this.agreements.get(cr.agreementId);
+		if (!agreement) throw Errors.notFound('Agreement not found');
+		cr.totals = computeTotals(agreement, cr);
+
+		this.transition(cr, CrStatus.PENDING_APPROVAL, CrAction.SEND_FOR_APPROVAL, user.id, at);
+
+		if (Math.abs(cr.totals.delta) > COMMITTEE_DELTA_THRESHOLD) {
+			if (!this.committeeConfig) throw Errors.validation('No committee configured for this delta');
+			cr.committee = { members: this.committeeConfig.members, head: this.committeeConfig.head, votes: [] };
+			this.transition(
+				cr,
+				CrStatus.COMMITTEE_VOTING,
+				CrAction.SEND_FOR_APPROVAL,
+				user.id,
+				at,
+				'delta exceeds threshold, routed to committee',
+			);
+		}
+
+		return this.repo.save(cr);
 	}
 
 	approve(user: ReqUser, id: string, at: string): ChangeRequest {
