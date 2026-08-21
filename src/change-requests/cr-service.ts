@@ -76,8 +76,42 @@ export class CrService {
 	}
 
 	castVote(user: ReqUser, id: string, decision: 'APPROVE' | 'REJECT', at: string): ChangeRequest {
-		// TODO: only committee members may vote; resolve on majority + head decision.
-		throw Errors.validation('castVote not implemented');
+		const cr = this.getOrThrow(user, id);
+		if (!hasPolicy(user, 'cr_a_u') && !hasPolicy(user, 'cr_a_o')) throw Errors.forbidden('Cannot vote');
+		if (cr.status !== CrStatus.COMMITTEE_VOTING || !cr.committee) {
+			throw Errors.illegalTransition('CR is not open for committee voting');
+		}
+		if (!cr.committee.members.includes(user.id)) throw Errors.forbidden('Not a committee member');
+		if (cr.committee.votes.some((v) => v.userId === user.id)) throw Errors.conflict('Already voted');
+
+		cr.committee = { ...cr.committee, votes: [...cr.committee.votes, { userId: user.id, decision, at }] };
+		cr.audit = [...cr.audit, { action: CrAction.CAST_VOTE, byUserId: user.id, at, note: decision }];
+
+		this.resolveCommitteeIfDecided(cr, user.id, at);
+		return this.repo.save(cr);
+	}
+
+	// A head REJECT vetoes immediately; otherwise APPROVED needs both a majority and the head's own APPROVE.
+	private resolveCommitteeIfDecided(cr: ChangeRequest, byUserId: string, at: string): void {
+		const committee = cr.committee;
+		if (!committee) return;
+
+		const approveCount = committee.votes.filter((v) => v.decision === 'APPROVE').length;
+		const majorityNeeded = Math.floor(committee.members.length / 2) + 1;
+		const remaining = committee.members.length - committee.votes.length;
+		const headVote = committee.votes.find((v) => v.userId === committee.head);
+
+		let decision: CrStatus.APPROVED | CrStatus.REJECTED | undefined;
+		if (headVote?.decision === 'REJECT' || approveCount + remaining < majorityNeeded) {
+			decision = CrStatus.REJECTED;
+		} else if (approveCount >= majorityNeeded && headVote?.decision === 'APPROVE') {
+			decision = CrStatus.APPROVED;
+		}
+		if (!decision) return;
+
+		cr.committee = { ...committee, resolvedAt: at };
+		this.transition(cr, CrStatus.COMMITTEE_DECISION, CrAction.RESOLVE_COMMITTEE, byUserId, at, `committee decision: ${decision}`);
+		this.transition(cr, decision, CrAction.RESOLVE_COMMITTEE, byUserId, at);
 	}
 
 	returnToDraft(user: ReqUser, id: string, at: string): ChangeRequest {
