@@ -23,7 +23,9 @@ export class CrRepo {
 	}
 
 	findOne(user: ReqUser, id: string): ChangeRequest | undefined {
-		return this.store.get(id);
+		const cr = this.store.get(id);
+		if (!cr) return undefined;
+		return this.scoped(user, [cr])[0];
 	}
 
 	save(cr: ChangeRequest): ChangeRequest {
