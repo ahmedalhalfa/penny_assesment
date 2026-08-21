@@ -7,7 +7,7 @@
 
 /** Round a value to 2 decimal places. */
 export function round2(value: number): number {
-	return Math.trunc(value * 100) / 100;
+	return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 /** Sum a list of monetary amounts. */
