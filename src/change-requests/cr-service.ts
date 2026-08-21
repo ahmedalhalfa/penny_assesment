@@ -3,6 +3,7 @@ import { ChangeRequest, Budget, PurchaseAgreement, COMMITTEE_DELTA_THRESHOLD } f
 import { CrStatus, CrAction } from './cr.enums';
 import { assertTransition } from './cr-state-machine';
 import { computeTotals } from './cr-totals';
+import { round2 } from '../common/money.util';
 import { Errors } from '../common/errors';
 import { ReqUser, hasPolicy } from '../common/policy';
 
@@ -103,10 +104,26 @@ export class CrService {
 	}
 
 	apply(user: ReqUser, id: string, at: string): ChangeRequest {
-		// TODO: require APPROVED + cr_x_* policy; check budget.balance covers a positive delta else
-		//       INSUFFICIENT_BUDGET; update budget, set APPLIED, audit. Recompute totals from the
-		//       agreement.
-		throw Errors.validation('apply not implemented');
+		const cr = this.getOrThrow(user, id);
+		if (!hasPolicy(user, 'cr_x_u') && !hasPolicy(user, 'cr_x_o')) throw Errors.forbidden('Cannot apply');
+		if (cr.status !== CrStatus.APPROVED) {
+			throw Errors.illegalTransition('Only an approved CR can be applied');
+		}
+
+		const agreement = this.agreements.get(cr.agreementId);
+		if (!agreement) throw Errors.notFound('Agreement not found');
+		cr.totals = computeTotals(agreement, cr);
+
+		if (cr.totals.delta > 0) {
+			const budget = this.budgets.get(agreement.budgetId);
+			if (!budget) throw Errors.notFound('Budget not found');
+			if (budget.balance < cr.totals.delta) throw Errors.insufficientBudget();
+			budget.balance = round2(budget.balance - cr.totals.delta);
+			budget.booked = round2(budget.booked + cr.totals.delta);
+		}
+
+		this.transition(cr, CrStatus.APPLIED, CrAction.APPLY, user.id, at);
+		return this.repo.save(cr);
 	}
 
 	/** Read a single CR. */
