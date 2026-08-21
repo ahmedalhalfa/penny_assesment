@@ -64,9 +64,14 @@ export class CrService {
 	}
 
 	approve(user: ReqUser, id: string, at: string): ChangeRequest {
-		// TODO: permission check (cr_a_*); legal transition; record approval + audit.
-		//       Committee CRs approve only via committee resolution.
-		throw Errors.validation('approve not implemented');
+		const cr = this.getOrThrow(user, id);
+		if (!hasPolicy(user, 'cr_a_u') && !hasPolicy(user, 'cr_a_o')) throw Errors.forbidden('Cannot approve');
+		if (cr.status !== CrStatus.PENDING_APPROVAL) {
+			throw Errors.illegalTransition('Only a CR awaiting single-approver decision can be approved this way');
+		}
+		cr.approvals = [...cr.approvals, { userId: user.id, action: 'APPROVE', at }];
+		this.transition(cr, CrStatus.APPROVED, CrAction.APPROVE, user.id, at);
+		return this.repo.save(cr);
 	}
 
 	castVote(user: ReqUser, id: string, decision: 'APPROVE' | 'REJECT', at: string): ChangeRequest {
@@ -75,13 +80,26 @@ export class CrService {
 	}
 
 	returnToDraft(user: ReqUser, id: string, at: string): ChangeRequest {
-		// TODO: PENDING_APPROVAL -> RETURNED -> editable as DRAFT; reset approval progress.
-		throw Errors.validation('return not implemented');
+		const cr = this.getOrThrow(user, id);
+		if (!hasPolicy(user, 'cr_a_u') && !hasPolicy(user, 'cr_a_o')) throw Errors.forbidden('Cannot return');
+		if (cr.status !== CrStatus.PENDING_APPROVAL) {
+			throw Errors.illegalTransition('Only a CR awaiting approval can be returned to draft');
+		}
+		this.transition(cr, CrStatus.RETURNED, CrAction.RETURN, user.id, at);
+		cr.approvals = [];
+		this.transition(cr, CrStatus.DRAFT, CrAction.RETURN, user.id, at, 'returned for edits');
+		return this.repo.save(cr);
 	}
 
 	reject(user: ReqUser, id: string, at: string): ChangeRequest {
-		// TODO: legal transition to REJECTED (terminal); budget untouched; audit.
-		throw Errors.validation('reject not implemented');
+		const cr = this.getOrThrow(user, id);
+		if (!hasPolicy(user, 'cr_a_u') && !hasPolicy(user, 'cr_a_o')) throw Errors.forbidden('Cannot reject');
+		if (cr.status !== CrStatus.PENDING_APPROVAL) {
+			throw Errors.illegalTransition('Only a CR awaiting single-approver decision can be rejected this way');
+		}
+		cr.approvals = [...cr.approvals, { userId: user.id, action: 'REJECT', at }];
+		this.transition(cr, CrStatus.REJECTED, CrAction.REJECT, user.id, at);
+		return this.repo.save(cr);
 	}
 
 	apply(user: ReqUser, id: string, at: string): ChangeRequest {
